@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>The Bloodline Ledger — The Wilding</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Spectral:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: #12100c; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+// ---------------------------------------------------------------------------
+// THE WILDING — BLOODLINE LEDGER (standalone build)
+// Runs entirely in the browser. Saves to this browser's local storage, so
+// use the same browser/tablet each time to see your saved data.
+// ---------------------------------------------------------------------------
+
+const TOKENS = {
+  bg: "#0f1410", surface: "#161d15", surface2: "#1c2419",
+  parchment: "#e9e0c6", parchmentDim: "#c9c0a4",
+  sage: "#7c8f6e", sageDim: "#556150",
+  gold: "#c19a55", goldDim: "#8a6f3e",
+  blood: "#9c433a", bloodDim: "#5e2b26",
+  line: "#3a4530", inkBg: "#12100c", inkSurface: "#1c1712",
+};
+
+const STATUS = {
+  none: { label: "no bloodline", color: TOKENS.sageDim },
+  unconfirmed: { label: "unconfirmed", color: TOKENS.gold },
+  confirmed: { label: "confirmed", color: TOKENS.blood },
+  redherring: { label: "red herring", color: "#6b6456" },
+};
+
+const STORAGE_KEY = "wilding-bloodline-tree-v2";
+const NODE_W = 176, NODE_H = 92, GAP_X = 30, ROW_H = 150;
+
+// Local-storage wrapper (this file runs standalone, not inside Claude's sandbox)
+const storage = {
+  async get(key) {
+    const v = localStorage.getItem(key);
+    return v ? { value: v } : null;
+  },
+  async set(key, value) {
+    localStorage.setItem(key, value);
+    return { value };
+  },
+};
+
+// Small inline icon set (no external icon package needed)
+function Icon({ name, size = 16, style }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", style };
+  switch (name) {
+    case "plus": return <svg {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>;
+    case "minus": return <svg {...p}><line x1="5" y1="12" x2="19" y2="12" /></svg>;
+    case "x": return <svg {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>;
+    case "copy": return <svg {...p}><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>;
+    case "printer": return <svg {...p}><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>;
+    case "trash": return <svg {...p}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>;
+    case "pin": return <svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>;
+    case "skull": return <svg {...p}><circle cx="12" cy="11" r="7" /><circle cx="9" cy="10" r="1" fill="currentColor" /><circle cx="15" cy="10" r="1" fill="currentColor" /><path d="M9 17v2M12 17v3M15 17v2" /></svg>;
+    case "zoomin": return <svg {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" /></svg>;
+    case "zoomout": return <svg {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" /></svg>;
+    case "fit": return <svg {...p}><polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" /></svg>;
+    default: return null;
+  }
+}
+
+const seedData = () => ({
+  people: [
+    { id: "p-rowena", publicName: "Rowena Oatley", secretName: "Rowena Sablerose", house: "House Sablerose", generation: 1, order: 0, region: "Farrowmere Vale", alive: true, spouseId: "p-aldric", parentIds: [], bloodlineStatus: "confirmed",
+      publicNote: "Widow. Runs the farm household with quiet, practiced calm.",
+      secretNote: "The one living link to the truth — knows the family's real name and what it means. Has watched her children for years, telling herself it's only caution." },
+    { id: "p-aldric", publicName: "Aldric Oatley", secretName: "", house: "", generation: 1, order: 1, region: "Farrowmere Vale", alive: false, spouseId: "p-rowena", parentIds: [], bloodlineStatus: "none",
+      publicNote: "Died of ordinary farm misfortune, years ago.",
+      secretNote: "Deliberately no hidden layers here — a normal grief, kept separate from the bloodline thread." },
+    { id: "p-dougal", publicName: "Dougal Oatley", secretName: "", house: "House Sablerose (unaware)", generation: 2, order: 0, region: "Farrowmere Vale", alive: true, spouseId: "", parentIds: ["p-rowena", "p-aldric"], bloodlineStatus: "unconfirmed",
+      publicNote: "Farmer, well-liked, generous — always good for a round at the Copper Kettle after harvest.",
+      secretNote: "Corwin's ledger shows suspiciously consistent high yields and unusually early debt repayment. Genuinely unaware anything is unusual about himself. Leave confirmed / false / ambiguous — resolve whenever it best serves the story." },
+    { id: "p-braddock", publicName: "Braddock Oatley", secretName: "", house: "House Sablerose (unaware)", generation: 2, order: 1, region: "Unknown — moved away", alive: true, spouseId: "", parentIds: ["p-rowena", "p-aldric"], bloodlineStatus: "unconfirmed",
+      publicNote: "Older brother, moved away some years back.",
+      secretNote: "Location intentionally left open — the natural first branch point for extending the bloodline web into another region." },
+  ],
+});
+
+function emptyPerson(generation) {
+  return {
+    id: "p-" + Math.random().toString(36).slice(2, 10),
+    publicName: "New Name", secretName: "", house: "",
+    generation: generation || 1, order: Date.now() % 100000, region: "",
+    alive: true, spouseId: "", parentIds: [], bloodlineStatus: "none",
+    publicNote: "", secretNote: "",
+  };
+}
+
+function relationText(person, allPeople) {
+  const byId = {};
+  allPeople.forEach((p) => (byId[p.id] = p));
+  const parts = [];
+  if (person.parentIds && person.parentIds.length) {
+    const names = person.parentIds.map((id) => byId[id] && byId[id].publicName).filter(Boolean);
+    if (names.length) parts.push("child of " + names.join(" & "));
+  }
+  if (person.spouseId && byId[person.spouseId]) parts.push("married to " + byId[person.spouseId].publicName);
+  return parts.join(" · ");
+}
+
+function splitFamilies(people) {
+  const byId = {};
+  people.forEach((p) => (byId[p.id] = p));
+  const adj = {};
+  people.forEach((p) => (adj[p.id] = new Set()));
+  people.forEach((p) => {
+    (p.parentIds || []).forEach((pid) => {
+      if (byId[pid]) { adj[p.id].add(pid); adj[pid].add(p.id); }
+    });
+    if (p.spouseId && byId[p.spouseId]) { adj[p.id].add(p.spouseId); adj[p.spouseId].add(p.id); }
+  });
+  const visited = new Set();
+  const families = [];
+  people.forEach((p) => {
+    if (visited.has(p.id)) return;
+    const stack = [p.id];
+    const members = [];
+    while (stack.length) {
+      const id = stack.pop();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      if (byId[id]) members.push(byId[id]);
+      adj[id].forEach((n) => { if (!visited.has(n)) stack.push(n); });
+    }
+    families.push(members);
+  });
+  return families;
+}
+
+function familyLabel(members) {
+  const withHouse = members.find((m) => m.house);
+  if (withHouse) return withHouse.house.replace(/\s*\(.*?\)\s*/g, "");
+  const eldest = [...members].sort((a, b) => a.generation - b.generation)[0];
+  return (eldest ? eldest.publicName.split(" ").pop() : "Unknown") + " family";
+}
+
+function computeLayout(members) {
+  const byId = {};
+  members.forEach((m) => (byId[m.id] = m));
+  const gens = {};
+  members.forEach((m) => { gens[m.generation] = gens[m.generation] || []; gens[m.generation].push(m); });
+  const genKeys = Object.keys(gens).map(Number).sort((a, b) => a - b);
+  const xById = {};
+
+  genKeys.forEach((g, gi) => {
+    const row = gens[g];
+    if (gi === 0) {
+      const placed = new Set();
+      const seq = [];
+      [...row].sort((a, b) => a.order - b.order).forEach((m) => {
+        if (placed.has(m.id)) return;
+        seq.push(m); placed.add(m.id);
+        if (m.spouseId && byId[m.spouseId] && row.includes(byId[m.spouseId]) && !placed.has(m.spouseId)) {
+          seq.push(byId[m.spouseId]); placed.add(m.spouseId);
+        }
+      });
+      seq.forEach((m, i) => (xById[m.id] = i * (NODE_W + GAP_X)));
+    } else {
+      const groups = {}; const noParent = [];
+      row.forEach((m) => {
+        if (m.parentIds && m.parentIds.length) {
+          const key = [...m.parentIds].sort().join(",");
+          groups[key] = groups[key] || []; groups[key].push(m);
+        } else noParent.push(m);
+      });
+      const groupEntries = Object.entries(groups).map(([key, list]) => {
+        const ids = key.split(",");
+        const xs = ids.map((id) => xById[id]).filter((x) => x !== undefined);
+        const avgX = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+        return { list: list.sort((a, b) => a.order - b.order), avgX };
+      }).sort((a, b) => a.avgX - b.avgX);
+
+      let cursor = 0;
+      const placed = new Set();
+      groupEntries.forEach((ge) => {
+        const width = ge.list.length * (NODE_W + GAP_X) - GAP_X;
+        let startX = ge.avgX - width / 2;
+        if (startX < cursor) startX = cursor;
+        ge.list.forEach((m, i) => {
+          if (placed.has(m.id)) return;
+          xById[m.id] = startX + i * (NODE_W + GAP_X);
+          placed.add(m.id);
+        });
+        cursor = startX + width + (NODE_W + GAP_X);
+      });
+      [...noParent].sort((a, b) => a.order - b.order).forEach((m) => {
+        if (placed.has(m.id)) return;
+        xById[m.id] = cursor; cursor += NODE_W + GAP_X; placed.add(m.id);
+        if (m.spouseId && byId[m.spouseId] && row.includes(byId[m.spouseId]) && !placed.has(m.spouseId)) {
+          xById[m.spouseId] = cursor; cursor += NODE_W + GAP_X; placed.add(m.spouseId);
+        }
+      });
+    }
+  });
+
+  const xs = Object.values(xById);
+  const minX = xs.length ? Math.min(...xs) : 0;
+  Object.keys(xById).forEach((id) => (xById[id] -= minX));
+
+  const positions = {};
+  members.forEach((m) => { positions[m.id] = { x: xById[m.id] || 0, y: genKeys.indexOf(m.generation) * ROW_H }; });
+  const maxX = (xs.length ? Math.max(...Object.values(xById)) : 0) + NODE_W;
+  return { positions, width: maxX + GAP_X, height: genKeys.length * ROW_H + NODE_H, genKeys };
+}
+
+function BloodlineLedger() {
+  const [people, setPeople] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [dmView, setDmView] = useState(true);
+  const [detailId, setDetailId] = useState(null);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const [anchorId, setAnchorId] = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await storage.get(STORAGE_KEY);
+        if (result && result.value) setPeople(JSON.parse(result.value).people || []);
+        else setPeople(seedData().people);
+      } catch (e) { setPeople(seedData().people); }
+      finally { setLoaded(true); }
+    })();
+  }, []);
+
+  const persist = async (next) => {
+    try { await storage.set(STORAGE_KEY, JSON.stringify({ people: next })); }
+    catch (e) { console.error("Could not save the ledger:", e); }
+  };
+
+  const updatePeople = (next) => { setPeople(next); persist(next); };
+  const patchPerson = (id, patch) => updatePeople(people.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+
+  const deletePerson = (id) => {
+    updatePeople(people.filter((p) => p.id !== id).map((p) => ({
+      ...p,
+      parentIds: (p.parentIds || []).filter((pid) => pid !== id),
+      spouseId: p.spouseId === id ? "" : p.spouseId,
+    })));
+    setDetailId(null);
+  };
+
+  const families = useMemo(() => splitFamilies(people), [people]);
+
+  useEffect(() => {
+    if (!anchorId && families.length) setAnchorId(families[0][0] && families[0][0].id);
+  }, [families, anchorId]);
+
+  const activeFamily = families.find((f) => f.some((m) => m.id === anchorId)) || families[0] || [];
+  const layout = useMemo(() => computeLayout(activeFamily), [activeFamily]);
+
+  const switchTo = (members) => { setAnchorId(members[0] && members[0].id); setZoom(1); };
+
+  const addRoot = () => {
+    const np = emptyPerson(1);
+    updatePeople([...people, np]);
+    switchTo([np]);
+    setDetailId(np.id);
+  };
+
+  const addToFamily = () => {
+    const maxGen = activeFamily.length ? Math.max(...activeFamily.map((m) => m.generation)) : 0;
+    const np = emptyPerson(maxGen + 1);
+    updatePeople([...people, np]);
+    setAnchorId(np.id);
+    setDetailId(np.id);
+  };
+
+  const fitToScreen = () => {
+    if (!scrollRef.current || !layout.width) return;
+    const available = scrollRef.current.clientWidth - 32;
+    const z = Math.min(1, Math.max(0.35, available / layout.width));
+    setZoom(z);
+  };
+
+  useEffect(() => {
+    const t = setTimeout(fitToScreen, 50);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [anchorId, activeFamily.length]);
+
+  const copyPlayerSummary = async () => {
+    let text = "KNOWN TO THE PARTY\n\n";
+    families.forEach((fam) => {
+      text += familyLabel(fam).toUpperCase() + "\n";
+      [...fam].sort((a, b) => a.generation - b.generation || a.order - b.order).forEach((p) => {
+        text += `${p.publicName}${p.alive ? "" : " (deceased)"}${p.region ? " — " + p.region : ""}\n`;
+        if (p.publicNote) text += `  ${p.publicNote}\n`;
+      });
+      text += "\n";
+    });
+    try { await navigator.clipboard.writeText(text.trim()); setCopyStatus("Copied"); }
+    catch (e) { setCopyStatus("Failed"); }
+    setTimeout(() => setCopyStatus(""), 1800);
+  };
+
+  const detailPerson = people.find((p) => p.id === detailId) || null;
+
+  if (!loaded) {
+    return (
+      <div style={{ background: TOKENS.bg, color: TOKENS.parchmentDim, fontFamily: "Spectral, serif" }} className="w-full h-screen flex items-center justify-center text-sm tracking-wide">
+        unrolling the ledger…
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ background: dmView ? TOKENS.inkBg : TOKENS.bg, color: TOKENS.parchment, fontFamily: "Spectral, serif", transition: "background 0.4s ease" }} className="screen-ui w-full h-screen flex flex-col overflow-hidden">
+        <style>{`
+          .fraunces { font-family: 'Fraunces', serif; }
+          .mono { font-family: 'Space Mono', monospace; }
+          @keyframes sealTurn { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
+          @keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+          .sheet-enter { animation: sheetUp 0.25s ease; }
+          input, textarea, select { font-family: 'Spectral', serif; }
+          .tab-scroll::-webkit-scrollbar { height: 6px; }
+          .tab-scroll::-webkit-scrollbar-thumb { background: ${TOKENS.line}; border-radius: 3px; }
+          .canvas-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+          .canvas-scroll::-webkit-scrollbar-thumb { background: ${TOKENS.line}; border-radius: 6px; }
+        `}</style>
+
+        <div style={{ borderBottom: `1px solid ${TOKENS.line}`, background: "rgba(0,0,0,0.15)" }} className="px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap shrink-0">
+          <div>
+            <h1 className="fraunces text-xl sm:text-2xl" style={{ color: TOKENS.parchment }}>The Bloodline Ledger</h1>
+            <p className="mono text-[10px] sm:text-xs mt-0.5" style={{ color: TOKENS.sageDim }}>
+              {families.length} {families.length === 1 ? "family" : "families"} on record
+            </p>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-4">
+            <button onClick={copyPlayerSummary} title="Copy player summary" className="flex items-center gap-1.5 mono text-xs px-2.5 py-2 rounded border" style={{ borderColor: TOKENS.line, color: TOKENS.parchmentDim }}>
+              <Icon name="copy" size={14} /><span className="hidden sm:inline">{copyStatus || "copy"}</span>
+            </button>
+            <button onClick={() => window.print()} title="Print player copy" className="flex items-center gap-1.5 mono text-xs px-2.5 py-2 rounded border" style={{ borderColor: TOKENS.goldDim, color: TOKENS.gold }}>
+              <Icon name="printer" size={14} /><span className="hidden sm:inline">print</span>
+            </button>
+            <button onClick={() => setDmView((v) => !v)} className="flex items-center gap-2" title="Toggle view">
+              <span className="mono text-[10px] hidden sm:inline" style={{ color: dmView ? TOKENS.sageDim : TOKENS.parchment }}>common</span>
+              <span style={{ width: 30, height: 30, borderRadius: "50%", border: `2px solid ${dmView ? TOKENS.blood : TOKENS.sageDim}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <span style={{ width: 12, height: 12, borderRadius: "50%", background: dmView ? TOKENS.blood : TOKENS.sageDim, animation: "sealTurn 0.5s ease" }} />
+              </span>
+              <span className="mono text-[10px] hidden sm:inline" style={{ color: dmView ? TOKENS.gold : TOKENS.sageDim }}>true</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="tab-scroll flex items-center gap-2 px-4 sm:px-6 py-2.5 overflow-x-auto shrink-0" style={{ borderBottom: `1px solid ${TOKENS.line}` }}>
+          {families.map((fam, i) => {
+            const active = fam === activeFamily;
+            return (
+              <button key={i} onClick={() => switchTo(fam)} className="mono text-xs px-3 py-1.5 rounded-full whitespace-nowrap"
+                style={{ border: `1px solid ${active ? TOKENS.gold : TOKENS.line}`, color: active ? TOKENS.gold : TOKENS.parchmentDim, background: active ? "rgba(193,154,85,0.08)" : "transparent" }}>
+                {familyLabel(fam)}
+              </button>
+            );
+          })}
+          <button onClick={addRoot} className="flex items-center gap-1 mono text-xs px-3 py-1.5 rounded-full border border-dashed" style={{ borderColor: TOKENS.line, color: TOKENS.parchmentDim }}>
+            <Icon name="plus" size={12} /> new family
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 px-4 sm:px-6 py-2 shrink-0">
+          <button onClick={() => setZoom((z) => Math.max(0.35, +(z - 0.15).toFixed(2)))} className="p-1.5 rounded border" style={{ borderColor: TOKENS.line, color: TOKENS.parchmentDim }}><Icon name="zoomout" size={14} /></button>
+          <span className="mono text-xs w-10 text-center" style={{ color: TOKENS.sageDim }}>{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom((z) => Math.min(1.75, +(z + 0.15).toFixed(2)))} className="p-1.5 rounded border" style={{ borderColor: TOKENS.line, color: TOKENS.parchmentDim }}><Icon name="zoomin" size={14} /></button>
+          <button onClick={fitToScreen} className="p-1.5 rounded border" style={{ borderColor: TOKENS.line, color: TOKENS.parchmentDim }} title="Fit to screen"><Icon name="fit" size={14} /></button>
+          <div style={{ flex: 1 }} />
+          <button onClick={addToFamily} className="flex items-center gap-1.5 mono text-xs px-3 py-1.5 rounded border" style={{ borderColor: TOKENS.goldDim, color: TOKENS.gold }}>
+            <Icon name="plus" size={13} /> add person
+          </button>
+        </div>
+
+        <div ref={scrollRef} className="canvas-scroll flex-1 overflow-auto relative">
+          <div style={{ width: layout.width * zoom, height: layout.height * zoom, position: "relative" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, width: layout.width, height: layout.height, transform: `scale(${zoom})`, transformOrigin: "top left" }}>
+              <svg width={layout.width} height={layout.height} style={{ position: "absolute", top: 0, left: 0, overflow: "visible" }}>
+                {activeFamily.map((child) => {
+                  if (!child.parentIds || !child.parentIds.length) return null;
+                  const parentPositions = child.parentIds.map((pid) => layout.positions[pid]).filter(Boolean);
+                  if (!parentPositions.length) return null;
+                  const childPos = layout.positions[child.id];
+                  if (!childPos) return null;
+                  const midX = parentPositions.reduce((s, p) => s + p.x + NODE_W / 2, 0) / parentPositions.length;
+                  const midY = parentPositions.reduce((s, p) => s + p.y + NODE_H, 0) / parentPositions.length;
+                  const cx = childPos.x + NODE_W / 2, cy = childPos.y;
+                  const elbowY = midY + (cy - midY) / 2;
+                  return <path key={"line-" + child.id} d={`M ${midX} ${midY} V ${elbowY} H ${cx} V ${cy}`} fill="none" stroke={TOKENS.line} strokeWidth={1.5} />;
+                })}
+                {(() => {
+                  const drawn = new Set();
+                  return activeFamily.filter((p) => p.spouseId).map((p) => {
+                    const key = [p.id, p.spouseId].sort().join("|");
+                    if (drawn.has(key)) return null;
+                    drawn.add(key);
+                    const a = layout.positions[p.id], b = layout.positions[p.spouseId];
+                    if (!a || !b) return null;
+                    const left = a.x < b.x ? a : b, right = a.x < b.x ? b : a;
+                    return <line key={"spouse-" + key} x1={left.x + NODE_W} y1={left.y + NODE_H / 2} x2={right.x} y2={right.y + NODE_H / 2} stroke={TOKENS.goldDim} strokeWidth={1.5} strokeDasharray="3 3" />;
+                  });
+                })()}
+              </svg>
+
+              {activeFamily.map((p) => {
+                const pos = layout.positions[p.id];
+                if (!pos) return null;
+                const status = STATUS[p.bloodlineStatus] || STATUS.none;
+                return (
+                  <button key={p.id} onClick={() => setDetailId(p.id)} className="text-left rounded-md px-3 py-2.5"
+                    style={{ position: "absolute", left: pos.x, top: pos.y, width: NODE_W, minHeight: NODE_H, background: dmView ? TOKENS.surface2 : TOKENS.surface, border: `1px solid ${detailId === p.id ? TOKENS.gold : TOKENS.line}`, opacity: p.alive ? 1 : 0.75 }}>
+                    <div className="flex items-center gap-1.5">
+                      {dmView && <span style={{ width: 8, height: 8, borderRadius: "50%", background: status.color, flexShrink: 0 }} />}
+                      <span className="fraunces text-sm truncate" style={{ color: TOKENS.parchment }}>{p.publicName || "Unnamed"}</span>
+                      {!p.alive && <Icon name="skull" size={12} style={{ color: TOKENS.sageDim, flexShrink: 0 }} />}
+                    </div>
+                    {dmView && p.secretName && <div className="mono text-[10px] mt-1 truncate" style={{ color: TOKENS.gold }}>{p.secretName}</div>}
+                    {p.region && <div className="flex items-center gap-1 text-[10px] mt-1.5" style={{ color: TOKENS.sageDim }}><Icon name="pin" size={10} /> <span className="truncate">{p.region}</span></div>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {detailPerson && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={() => setDetailId(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="sheet-enter w-full sm:max-w-md sm:rounded-lg rounded-t-lg overflow-y-auto" style={{ background: TOKENS.surface, maxHeight: "85vh", fontFamily: "Spectral, serif" }}>
+            <div className="px-5 pt-4 pb-2 flex items-center justify-between sticky top-0" style={{ background: TOKENS.surface, borderBottom: `1px solid ${TOKENS.line}` }}>
+              <span className="mono text-xs" style={{ color: TOKENS.sageDim }}>edit record</span>
+              <button onClick={() => setDetailId(null)} className="mono text-xs p-1" style={{ color: TOKENS.parchmentDim }}><Icon name="x" size={16} /></button>
+            </div>
+            <div className="px-5 py-4">
+              <DetailForm person={detailPerson} allPeople={people} onChange={(patch) => patchPerson(detailPerson.id, patch)} onDelete={() => deletePerson(detailPerson.id)} />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Chip({ active, onClick, children, color }) {
+  return (
+    <button type="button" onClick={onClick} className="mono text-[11px] px-2.5 py-1.5 rounded-full border"
+      style={{ borderColor: active ? color || TOKENS.gold : TOKENS.line, color: active ? color || TOKENS.gold : TOKENS.parchmentDim, background: active ? "rgba(193,154,85,0.08)" : "transparent" }}>
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, value, onInput, textarea }) {
+  return (
+    <label className="block mb-3">
+      <div className="mono text-[11px] mb-1.5" style={{ color: TOKENS.sageDim }}>{label}</div>
+      {textarea ? (
+        <textarea value={value} onChange={(e) => onInput(e.target.value)} rows={3} className="w-full rounded px-3 py-2.5 text-sm" style={{ background: TOKENS.inkSurface, color: TOKENS.parchment, border: `1px solid ${TOKENS.line}`, resize: "vertical" }} />
+      ) : (
+        <input value={value} onChange={(e) => onInput(e.target.value)} className="w-full rounded px-3 py-2.5 text-sm" style={{ background: TOKENS.inkSurface, color: TOKENS.parchment, border: `1px solid ${TOKENS.line}` }} />
+      )}
+    </label>
+  );
+}
+
+function DetailForm({ person, allPeople, onChange, onDelete }) {
+  const others = allPeople.filter((p) => p.id !== person.id);
+  return (
+    <div>
+      <Field label="public name" value={person.publicName} onInput={(v) => onChange({ publicName: v })} />
+      <Field label="region" value={person.region} onInput={(v) => onChange({ region: v })} />
+      <label className="flex items-center gap-2 my-3 mono text-xs" style={{ color: TOKENS.parchmentDim }}>
+        <input type="checkbox" checked={person.alive} onChange={(e) => onChange({ alive: e.target.checked })} /> alive
+      </label>
+      <Field label="public note (what players may learn)" value={person.publicNote} onInput={(v) => onChange({ publicNote: v })} textarea />
+      <div className="mb-3">
+        <div className="mono text-[11px] mb-1.5" style={{ color: TOKENS.sageDim }}>generation</div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => onChange({ generation: Math.max(1, person.generation - 1) })} className="rounded p-2" style={{ border: `1px solid ${TOKENS.line}`, color: TOKENS.parchmentDim }}><Icon name="minus" size={14} /></button>
+          <span className="mono text-sm w-6 text-center">{person.generation}</span>
+          <button onClick={() => onChange({ generation: person.generation + 1 })} className="rounded p-2" style={{ border: `1px solid ${TOKENS.line}`, color: TOKENS.parchmentDim }}><Icon name="plus" size={14} /></button>
+        </div>
+      </div>
+      <div className="mb-3">
+        <div className="mono text-[11px] mb-1.5" style={{ color: TOKENS.sageDim }}>parents (tap to toggle)</div>
+        <div className="flex flex-wrap gap-2">
+          {others.length === 0 && <span className="text-xs" style={{ color: TOKENS.sageDim }}>no one else in the ledger yet</span>}
+          {others.map((o) => {
+            const active = (person.parentIds || []).includes(o.id);
+            return (
+              <Chip key={o.id} active={active} onClick={() => {
+                const set = new Set(person.parentIds || []);
+                active ? set.delete(o.id) : set.add(o.id);
+                onChange({ parentIds: Array.from(set) });
+              }}>{o.publicName}</Chip>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mb-4">
+        <div className="mono text-[11px] mb-1.5" style={{ color: TOKENS.sageDim }}>spouse (tap to set)</div>
+        <div className="flex flex-wrap gap-2">
+          <Chip active={!person.spouseId} onClick={() => onChange({ spouseId: "" })}>none</Chip>
+          {others.map((o) => (
+            <Chip key={o.id} active={person.spouseId === o.id} onClick={() => onChange({ spouseId: o.id })}>{o.publicName}</Chip>
+          ))}
+        </div>
+      </div>
+      <div className="my-4" style={{ height: 1, background: TOKENS.line }} />
+      <div className="mono text-[11px] mb-2" style={{ color: TOKENS.blood }}>true record — DM eyes only</div>
+      <Field label="true name (secret)" value={person.secretName} onInput={(v) => onChange({ secretName: v })} />
+      <Field label="house / lineage" value={person.house} onInput={(v) => onChange({ house: v })} />
+      <div className="mb-3">
+        <div className="mono text-[11px] mb-1.5" style={{ color: TOKENS.sageDim }}>bloodline status</div>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(STATUS).map(([key, s]) => (
+            <Chip key={key} active={person.bloodlineStatus === key} onClick={() => onChange({ bloodlineStatus: key })} color={s.color}>{s.label}</Chip>
+          ))}
+        </div>
+      </div>
+      <Field label="secret note" value={person.secretNote} onInput={(v) => onChange({ secretNote: v })} textarea />
+      <button onClick={onDelete} className="w-full flex items-center justify-center gap-1.5 mono text-xs px-3 py-2.5 rounded border mt-2 mb-2" style={{ borderColor: TOKENS.bloodDim, color: TOKENS.blood }}>
+        <Icon name="trash" size={14} /> remove from ledger
+      </button>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<BloodlineLedger />);
+</script>
+</body>
+</html>
